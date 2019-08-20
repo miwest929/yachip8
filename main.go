@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
-	//sdl "github.com/veandco/go-sdl2/sdl"
+	sdl "github.com/veandco/go-sdl2/sdl"
 	"io/ioutil"
 	"math/rand"
-	"os"
+	//	"os"
 	"strings"
 )
 
@@ -217,10 +217,16 @@ func (memory *Memory) storeDigitSprites() {
 	memory.ram[0x003B] = 0x80
 }
 
+// Default Chip8 resolution
+const CHIP_8_WIDTH int32 = 64
+const CHIP_8_HEIGHT int32 = 32
+
 type Display struct {
 	graphics [][]byte
 	rows     int
 	cols     int
+	window   *sdl.Window
+	canvas   *sdl.Renderer
 }
 
 func NewDisplay(rows int, cols int) *Display {
@@ -228,7 +234,48 @@ func NewDisplay(rows int, cols int) *Display {
 	for i := range data {
 		data[i] = make([]byte, cols)
 	}
-	return &Display{rows: rows, cols: cols, graphics: data}
+
+	var modifier int32 = 10
+	window, windowErr := sdl.CreateWindow("Chip 8", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, CHIP_8_WIDTH*modifier, CHIP_8_HEIGHT*modifier, sdl.WINDOW_SHOWN)
+	if windowErr != nil {
+		panic(windowErr)
+	}
+
+	// Create render surface
+	c, cErr := sdl.CreateRenderer(window, -1, 0)
+	if cErr != nil {
+		panic(cErr)
+	}
+
+	return &Display{rows: rows, cols: cols, graphics: data, canvas: c, window: window}
+}
+
+func (display *Display) Teardown() {
+	display.window.Destroy()
+	display.canvas.Destroy()
+	sdl.Quit()
+}
+
+func (display *Display) Render() {
+	for i, row := range display.graphics {
+		for j, _ := range row {
+			if display.graphics[i][j] == 0 {
+				display.canvas.SetDrawColor(0, 0, 0, 255)
+			} else {
+				display.canvas.SetDrawColor(255, 255, 255, 255)
+			}
+
+			var modifier int32 = 10
+			display.canvas.FillRect(&sdl.Rect{
+				Y: int32(j) * modifier,
+				X: int32(i) * modifier,
+				W: modifier,
+				H: modifier,
+			})
+		}
+	}
+
+	display.canvas.Present()
 }
 
 func (display *Display) ClearScreen() {
@@ -244,6 +291,10 @@ type ROM struct {
 }
 
 func NewChip8() *Chip8 {
+	if sdlErr := sdl.Init(sdl.INIT_EVERYTHING); sdlErr != nil {
+		panic(sdlErr)
+	}
+
 	cpu := CPU{V: make([]byte, 16)}
 	memory := NewMemory()
 	display := NewDisplay(64, 32)
@@ -428,10 +479,31 @@ func (cpu *CPU) executeInstruction(instruction string, args []uint, memory *Memo
 		rnd := rand.Intn(256)
 		cpu.V[reg] = byte(rnd) & byte(kk)
 	case DRW:
-		//  reg1 := args[0]
-		//  reg2 := args[1]
-		//  n := args[2]
+		// Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision
+		x := uint(cpu.V[args[0]])
+		y := uint(cpu.V[args[1]])
+		n := args[2]
+
+		var cf byte
+		for j := uint(0); j < n; j++ {
+			pixel := memory.ram[cpu.I+j]
+			for i := uint(0); i < 8; i++ {
+				if pixel&(0x80>>i) != 0 {
+					if display.graphics[y+j][x+i] == 1 {
+						cf = 1
+					}
+					display.graphics[y+j][x+i] ^= 1
+				}
+			}
+		}
+		cpu.V[0xF] = cf
+		cpu.shouldDrawGraphics = true
+	case SKP:
+		// Skips the next instruction if the key stored in VX is pressed
 	}
+
+	// move to next program instruction
+	cpu.PC += 2
 }
 
 func (cpu *CPU) Run(memory *Memory, display *Display) {
@@ -453,15 +525,15 @@ func (cpu *CPU) Run(memory *Memory, display *Display) {
 
 		// draw graphics
 		if cpu.shouldDrawGraphics {
-			//GRAPHICS_MEMORY_ADDR
+			display.Render()
 		}
 
 		if cpu.shouldPlaySound {
 
 		}
-		// move to next program instruction
-		cpu.PC += 2
 	}
+
+	display.Teardown()
 }
 
 func (cpu *CPU) parseInstruction(word uint) (string, []uint) {
@@ -622,7 +694,7 @@ func main() {
 
 	rom := LoadRomFromFile("./roms/Breakout.ch8")
 
-	disassembled := chip8.Disassemble(rom)
+	/*disassembled := chip8.Disassemble(rom)
 	f, err := os.Create("Breakout.disassembled")
 	if err != nil {
 		fmt.Println(err)
@@ -630,7 +702,7 @@ func main() {
 	}
 	for _, instruction := range disassembled {
 		f.WriteString(instruction + "\n")
-	}
+	}*/
 
-	//	chip8.loadRom(rom)
+	chip8.loadRom(rom)
 }
